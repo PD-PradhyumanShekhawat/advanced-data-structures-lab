@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <ostream>
 #include <stdexcept>
+#include <string>
 
 class BitWriter {
 public:
