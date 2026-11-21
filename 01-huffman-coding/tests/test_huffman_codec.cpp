@@ -10,6 +10,8 @@
 #include <stdexcept>
 #include <string>
 #include <vector>
+#include <algorithm>
+#include <iterator>
 
 namespace fs = std::filesystem;
 
