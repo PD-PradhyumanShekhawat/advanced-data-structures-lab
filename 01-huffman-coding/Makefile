@@ -14,6 +14,9 @@ HUFFMAN_CODEC_TEST = $(BUILD_DIR)/test_huffman_codec
 HUFFMAN_APP = $(BUILD_DIR)/huffman
 BENCHMARK = $(BUILD_DIR)/benchmark_huffman
 
+CRC32_TEST = $(BUILD_DIR)/test_crc32
+ARCHIVE_FORMAT_TEST = $(BUILD_DIR)/test_archive_format
+
 .PHONY: all test benchmark clean
 
 all: $(HUFFMAN_APP) test
@@ -42,12 +45,20 @@ $(HUFFMAN_APP): src/main.cpp src/huffman_codec.cpp | $(BUILD_DIR)
 $(BENCHMARK): benchmarks/benchmark_huffman.cpp src/huffman_codec.cpp | $(BUILD_DIR)
 	$(CXX) $(RELEASE_FLAGS) $^ -o $@
 
-test: $(MIN_HEAP_TEST) $(HUFFMAN_TREE_TEST) $(HUFFMAN_CODES_TEST) $(BIT_IO_TEST) $(HUFFMAN_CODEC_TEST)
+$(CRC32_TEST): tests/test_crc32.cpp include/crc32.hpp | $(BUILD_DIR)
+	$(CXX) $(CXXFLAGS) $< -o $@
+
+$(ARCHIVE_FORMAT_TEST): tests/test_archive_format.cpp include/archive_format.hpp include/frequency_table.hpp | $(BUILD_DIR)
+	$(CXX) $(CXXFLAGS) $< -o $@
+
+test: $(MIN_HEAP_TEST) $(HUFFMAN_TREE_TEST) $(HUFFMAN_CODES_TEST) $(BIT_IO_TEST) $(HUFFMAN_CODEC_TEST) $(CRC32_TEST) $(ARCHIVE_FORMAT_TEST)
 	./$(MIN_HEAP_TEST)
 	./$(HUFFMAN_TREE_TEST)
 	./$(HUFFMAN_CODES_TEST)
 	./$(BIT_IO_TEST)
 	./$(HUFFMAN_CODEC_TEST)
+	./$(CRC32_TEST)
+	./$(ARCHIVE_FORMAT_TEST)
 
 benchmark: $(BENCHMARK)
 	./$(BENCHMARK)
