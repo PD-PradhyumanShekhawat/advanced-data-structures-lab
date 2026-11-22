@@ -186,10 +186,19 @@ void test_corrupted_payload() {
     compress_file(input, archive);
 
     auto archive_bytes = read_bytes(archive);
-    assert(archive_bytes.size() > 57);
 
-    // Flip a bit in the compressed payload.
-    archive_bytes.back() ^= 0x80U;
+    std::ifstream archive_stream(archive, std::ios::binary);
+    const auto header = ArchiveFormat::read_header(archive_stream);
+    (void)header;
+
+    const auto payload_position = static_cast<std::size_t>(
+        static_cast<std::streamoff>(archive_stream.tellg())
+    );
+
+    assert(payload_position < archive_bytes.size());
+
+    // Flip the first meaningful payload bit.
+    archive_bytes[payload_position] ^= 0x80U;
 
     write_bytes(archive, archive_bytes);
 
