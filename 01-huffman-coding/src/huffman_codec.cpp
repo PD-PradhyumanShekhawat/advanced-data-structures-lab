@@ -1,55 +1,23 @@
 
 #include "../include/huffman_codec.hpp"
 
+#include "../include/archive_format.hpp"
 #include "../include/bit_reader.hpp"
 #include "../include/bit_writer.hpp"
+#include "../include/crc32.hpp"
 #include "../include/frequency_table.hpp"
 #include "../include/huffman_codes.hpp"
 #include "../include/huffman_tree.hpp"
 
-#include <array>
+#include <cstdint>
+#include <filesystem>
 #include <fstream>
-#include <iterator>
 #include <limits>
 #include <memory>
 #include <stdexcept>
-#include <string>
 #include <vector>
 
 namespace {
-
-constexpr char MAGIC[8] = {
-    'H', 'U', 'F', 'F', 'M', 'A', 'N', '1'
-};
-
-void write_u64(std::ostream& out, std::uint64_t value) {
-    for (unsigned i = 0; i < 8; ++i) {
-        out.put(static_cast<char>(value & 0xFF));
-        value >>= 8;
-    }
-
-    if (!out) {
-        throw std::runtime_error("Failed to write archive header");
-    }
-}
-
-std::uint64_t read_u64(std::istream& in) {
-    std::uint64_t value = 0;
-
-    for (unsigned i = 0; i < 8; ++i) {
-        int byte = in.get();
-
-        if (byte == std::char_traits<char>::eof()) {
-            throw std::runtime_error("Truncated archive header");
-        }
-
-        value |= static_cast<std::uint64_t>(
-            static_cast<unsigned char>(byte)
-        ) << (i * 8);
-    }
-
-    return value;
-}
 
 std::vector<std::uint8_t> read_file(
     const std::filesystem::path& path
@@ -61,8 +29,8 @@ std::vector<std::uint8_t> read_file(
     }
 
     std::vector<std::uint8_t> data;
-
     char byte;
+
     while (input.get(byte)) {
         data.push_back(static_cast<std::uint8_t>(
             static_cast<unsigned char>(byte)
@@ -76,57 +44,77 @@ std::vector<std::uint8_t> read_file(
     return data;
 }
 
-void write_header(
-    std::ostream& output,
-    std::uint64_t original_size,
-    const FrequencyTable& frequencies
+std::uint64_t calculate_payload_bits(
+    const FrequencyTable& frequencies,
+    const HuffmanCodeTable& codes
 ) {
-    output.write(MAGIC, sizeof(MAGIC));
-    write_u64(output, original_size);
+    std::uint64_t total_bits = 0;
 
-    for (std::uint64_t frequency : frequencies) {
-        write_u64(output, frequency);
-    }
-}
+    for (std::size_t symbol = 0; symbol < frequencies.size(); ++symbol) {
+        const std::uint64_t frequency = frequencies[symbol];
 
-FrequencyTable read_header(
-    std::istream& input,
-    std::uint64_t& original_size
-) {
-    char magic[sizeof(MAGIC)];
-
-    input.read(magic, sizeof(magic));
-
-    if (!input || !std::equal(
-            std::begin(magic), std::end(magic),
-            std::begin(MAGIC))) {
-        throw std::runtime_error("Invalid Huffman archive");
-    }
-
-    original_size = read_u64(input);
-
-    FrequencyTable frequencies{};
-
-    std::uint64_t total = 0;
-
-    for (std::size_t i = 0; i < frequencies.size(); ++i) {
-        frequencies[i] = read_u64(input);
-
-        if (frequencies[i] >
-            std::numeric_limits<std::uint64_t>::max() - total) {
-            throw std::runtime_error("Frequency table overflow");
+        if (frequency == 0) {
+            continue;
         }
 
-        total += frequencies[i];
+        const std::uint64_t code_length =
+            static_cast<std::uint64_t>(codes[symbol].size());
+
+        if (code_length == 0) {
+            throw std::runtime_error("Missing Huffman code");
+        }
+
+        if (frequency >
+            std::numeric_limits<std::uint64_t>::max() / code_length) {
+            throw std::runtime_error("Encoded payload size overflow");
+        }
+
+        const std::uint64_t symbol_bits = frequency * code_length;
+
+        if (symbol_bits >
+            std::numeric_limits<std::uint64_t>::max() - total_bits) {
+            throw std::runtime_error("Encoded payload size overflow");
+        }
+
+        total_bits += symbol_bits;
     }
 
-    if (total != original_size) {
-        throw std::runtime_error(
-            "Archive size does not match frequency table"
-        );
+    return total_bits;
+}
+
+void validate_payload_length(
+    const std::filesystem::path& archive_path,
+    std::istream& input,
+    std::uint64_t payload_bits
+) {
+    const std::streampos payload_position = input.tellg();
+
+    if (payload_position < 0) {
+        throw std::runtime_error("Cannot determine payload position");
     }
 
-    return frequencies;
+    const std::uint64_t header_size =
+        static_cast<std::uint64_t>(payload_position);
+
+    const std::uint64_t payload_bytes =
+        payload_bits / 8 + (payload_bits % 8 != 0 ? 1 : 0);
+
+    if (payload_bytes >
+        std::numeric_limits<std::uint64_t>::max() - header_size) {
+        throw std::runtime_error("Archive size overflow");
+    }
+
+    const std::uint64_t expected_size = header_size + payload_bytes;
+    const std::uint64_t actual_size =
+        std::filesystem::file_size(archive_path);
+
+    if (actual_size < expected_size) {
+        throw std::runtime_error("Truncated compressed payload");
+    }
+
+    if (actual_size > expected_size) {
+        throw std::runtime_error("Unexpected trailing archive data");
+    }
 }
 
 } // namespace
@@ -135,11 +123,25 @@ CompressionStats compress_file(
     const std::filesystem::path& input_path,
     const std::filesystem::path& output_path
 ) {
-    auto data = read_file(input_path);
+    const auto data = read_file(input_path);
 
-    auto frequencies = calculate_frequencies(data);
-    auto root = build_huffman_tree(frequencies);
-    auto codes = generate_huffman_codes(root);
+    const auto frequencies = calculate_frequencies(data);
+    const auto root = build_huffman_tree(frequencies);
+    const auto codes = generate_huffman_codes(root);
+
+    const std::uint64_t payload_bits =
+        calculate_payload_bits(frequencies, codes);
+
+    const std::uint32_t checksum = calculate_crc32(
+        data.data(),
+        data.size()
+    );
+
+    ArchiveHeader header;
+    header.original_size = static_cast<std::uint64_t>(data.size());
+    header.payload_bits = payload_bits;
+    header.checksum = checksum;
+    header.frequencies = frequencies;
 
     std::ofstream output(output_path, std::ios::binary);
 
@@ -147,7 +149,7 @@ CompressionStats compress_file(
         throw std::runtime_error("Cannot create output archive");
     }
 
-    write_header(output, data.size(), frequencies);
+    ArchiveFormat::write_header(output, header);
 
     BitWriter writer(output);
 
@@ -156,13 +158,18 @@ CompressionStats compress_file(
     }
 
     writer.finish();
+
+    if (writer.bits_written() != payload_bits) {
+        throw std::runtime_error("Encoded bit count mismatch");
+    }
+
     output.close();
 
     if (!output) {
         throw std::runtime_error("Failed to finalize archive");
     }
 
-    const auto archive_size =
+    const std::uint64_t archive_size =
         std::filesystem::file_size(output_path);
 
     const double ratio = data.empty()
@@ -187,79 +194,109 @@ std::uint64_t decompress_file(
         throw std::runtime_error("Cannot open archive");
     }
 
-    std::uint64_t original_size = 0;
-    auto frequencies = read_header(input, original_size);
+    const ArchiveHeader header = ArchiveFormat::read_header(input);
 
-    auto root = build_huffman_tree(frequencies);
+    validate_payload_length(
+        input_path,
+        input,
+        header.payload_bits
+    );
 
-    if (original_size > std::vector<std::uint8_t>().max_size()) {
+    const auto root = build_huffman_tree(header.frequencies);
+    const auto codes = generate_huffman_codes(root);
+
+    const std::uint64_t expected_payload_bits =
+        calculate_payload_bits(header.frequencies, codes);
+
+    if (expected_payload_bits != header.payload_bits) {
+        throw std::runtime_error(
+            "Payload bit count does not match frequency table"
+        );
+    }
+
+    if (header.original_size >
+        std::vector<std::uint8_t>().max_size()) {
         throw std::runtime_error("Archive is too large to decode");
     }
 
     std::vector<std::uint8_t> decoded;
-    decoded.reserve(static_cast<std::size_t>(original_size));
+    decoded.reserve(static_cast<std::size_t>(header.original_size));
 
-    if (original_size == 0) {
-        if (root) {
-            throw std::runtime_error("Invalid empty archive");
+    if (header.original_size > 0 && !root) {
+        throw std::runtime_error("Missing Huffman tree");
+    }
+
+    BitReader reader(input, header.payload_bits);
+
+    if (root && root->is_leaf()) {
+        for (std::uint64_t i = 0; i < header.original_size; ++i) {
+            bool bit = false;
+
+            if (!reader.read_bit(bit)) {
+                throw std::runtime_error(
+                    "Compressed payload ended unexpectedly"
+                );
+            }
+
+            if (bit) {
+                throw std::runtime_error(
+                    "Invalid single-symbol Huffman payload"
+                );
+            }
+
+            decoded.push_back(
+                static_cast<std::uint8_t>(root->symbol)
+            );
         }
-    } else {
-        if (!root) {
-            throw std::runtime_error("Missing Huffman tree");
-        }
+    } else if (root) {
+        while (decoded.size() < header.original_size) {
+            auto node = root;
 
-        BitReader reader(input);
+            while (!node->is_leaf()) {
+                bool bit = false;
 
-        if (root->is_leaf()) {
-            for (std::uint64_t i = 0; i < original_size; ++i) {
-                bool bit;
-
-                if (!reader.read_bit(bit) || bit) {
+                if (!reader.read_bit(bit)) {
                     throw std::runtime_error(
-                        "Invalid single-symbol payload"
+                        "Compressed payload ended unexpectedly"
                     );
                 }
 
-                decoded.push_back(
-                    static_cast<std::uint8_t>(root->symbol)
-                );
-            }
-        } else {
-            while (decoded.size() < original_size) {
-                auto node = root;
+                node = bit ? node->right : node->left;
 
-                while (!node->is_leaf()) {
-                    bool bit;
-
-                    if (!reader.read_bit(bit)) {
-                        throw std::runtime_error(
-                            "Compressed payload ended unexpectedly"
-                        );
-                    }
-
-                    node = bit ? node->right : node->left;
-
-                    if (!node) {
-                        throw std::runtime_error(
-                            "Invalid Huffman bit sequence"
-                        );
-                    }
+                if (!node) {
+                    throw std::runtime_error(
+                        "Invalid Huffman bit sequence"
+                    );
                 }
-
-                decoded.push_back(
-                    static_cast<std::uint8_t>(node->symbol)
-                );
             }
+
+            decoded.push_back(
+                static_cast<std::uint8_t>(node->symbol)
+            );
         }
     }
 
-    // Verify that the decoded data matches the stored frequencies.
-    auto decoded_frequencies = calculate_frequencies(decoded);
+    if (reader.bits_read() != header.payload_bits) {
+        throw std::runtime_error(
+            "Decoded data does not consume the declared payload bits"
+        );
+    }
 
-    if (decoded_frequencies != frequencies) {
+    const auto decoded_frequencies = calculate_frequencies(decoded);
+
+    if (decoded_frequencies != header.frequencies) {
         throw std::runtime_error(
             "Decoded data does not match archive frequencies"
         );
+    }
+
+    const std::uint32_t decoded_checksum = calculate_crc32(
+        decoded.data(),
+        decoded.size()
+    );
+
+    if (decoded_checksum != header.checksum) {
+        throw std::runtime_error("CRC-32 checksum mismatch");
     }
 
     std::ofstream output(output_path, std::ios::binary);
@@ -279,5 +316,11 @@ std::uint64_t decompress_file(
         throw std::runtime_error("Failed to write decoded output");
     }
 
-    return original_size;
+    output.close();
+
+    if (!output) {
+        throw std::runtime_error("Failed to finalize decoded output");
+    }
+
+    return header.original_size;
 }
