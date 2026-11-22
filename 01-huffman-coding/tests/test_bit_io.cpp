@@ -6,7 +6,6 @@
 #include <iostream>
 #include <sstream>
 #include <string>
-#include <vector>
 
 void test_full_byte() {
     std::stringstream stream;
@@ -20,18 +19,21 @@ void test_full_byte() {
 
     writer.finish();
 
+    assert(writer.bits_written() == 8);
     assert(stream.str().size() == 1);
     assert(static_cast<unsigned char>(stream.str()[0]) == 0xB2);
 
-    BitReader reader(stream);
+    BitReader reader(stream, 8);
     std::string output;
 
-    bool bit;
+    bool bit = false;
+
     while (reader.read_bit(bit)) {
         output += bit ? '1' : '0';
     }
 
     assert(output == input);
+    assert(reader.bits_read() == 8);
 }
 
 void test_partial_byte() {
@@ -44,12 +46,13 @@ void test_partial_byte() {
     writer.write_bit(true);
     writer.finish();
 
+    assert(writer.bits_written() == 3);
     assert(static_cast<unsigned char>(stream.str()[0]) == 0xA0);
 
-    BitReader reader(stream);
+    BitReader reader(stream, 3);
 
-    bool bit;
-    const bool expected[] = {true, false, true, false, false, false, false, false};
+    bool bit = false;
+    const bool expected[] = {true, false, true};
 
     for (bool expected_bit : expected) {
         assert(reader.read_bit(bit));
@@ -57,6 +60,32 @@ void test_partial_byte() {
     }
 
     assert(!reader.read_bit(bit));
+    assert(reader.bits_read() == 3);
+}
+
+void test_bounded_reader_ignores_padding() {
+    std::stringstream stream;
+
+    BitWriter writer(stream);
+
+    writer.write_bit(true);
+    writer.write_bit(false);
+    writer.write_bit(true);
+    writer.finish();
+
+    BitReader reader(stream, 2);
+
+    bool bit = false;
+
+    assert(reader.read_bit(bit));
+    assert(bit);
+
+    assert(reader.read_bit(bit));
+    assert(!bit);
+
+    // The third encoded bit is not read because the limit is two.
+    assert(!reader.read_bit(bit));
+    assert(reader.bits_read() == 2);
 }
 
 void test_empty_stream() {
@@ -64,14 +93,37 @@ void test_empty_stream() {
     BitReader reader(stream);
 
     bool bit = false;
+
     assert(!reader.read_bit(bit));
+    assert(reader.bits_read() == 0);
+}
+
+void test_truncated_stream() {
+    std::stringstream stream;
+
+    stream.put(static_cast<char>(0x80));
+    stream.seekg(0);
+
+    BitReader reader(stream, 16);
+
+    bool bit = false;
+
+    assert(reader.read_bit(bit));
+    assert(bit);
+
+    // The stream ends before the requested 16 bits are available.
+    assert(!reader.read_bit(bit));
+    assert(reader.bits_read() == 1);
 }
 
 int main() {
     test_full_byte();
     test_partial_byte();
+    test_bounded_reader_ignores_padding();
     test_empty_stream();
+    test_truncated_stream();
 
     std::cout << "All bit I/O tests passed.\n";
+
     return 0;
 }
