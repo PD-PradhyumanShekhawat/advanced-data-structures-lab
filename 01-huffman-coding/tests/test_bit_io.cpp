@@ -104,16 +104,24 @@ void test_truncated_stream() {
     stream.put(static_cast<char>(0x80));
     stream.seekg(0);
 
+    // Request 16 bits, but provide only one byte (8 bits).
     BitReader reader(stream, 16);
 
     bool bit = false;
 
+    // First bit of 0x80 is 1.
     assert(reader.read_bit(bit));
     assert(bit);
 
-    // The stream ends before the requested 16 bits are available.
+    // Remaining seven bits are zero.
+    for (int i = 0; i < 7; ++i) {
+        assert(reader.read_bit(bit));
+        assert(!bit);
+    }
+
+    // The stream contains no second byte.
     assert(!reader.read_bit(bit));
-    assert(reader.bits_read() == 1);
+    assert(reader.bits_read() == 8);
 }
 
 int main() {
