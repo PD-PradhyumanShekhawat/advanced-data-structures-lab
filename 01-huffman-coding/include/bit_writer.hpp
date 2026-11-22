@@ -2,6 +2,7 @@
 #pragma once
 
 #include <cstdint>
+#include <limits>
 #include <ostream>
 #include <stdexcept>
 #include <string>
@@ -12,11 +13,16 @@ public:
         : output_(output) {}
 
     void write_bit(bool bit) {
+        if (bits_written_ == std::numeric_limits<std::uint64_t>::max()) {
+            throw std::overflow_error("Encoded bit count overflow");
+        }
+
         buffer_ = static_cast<std::uint8_t>(
             (buffer_ << 1) | (bit ? 1 : 0)
         );
 
         ++bits_filled_;
+        ++bits_written_;
 
         if (bits_filled_ == 8) {
             flush_byte();
@@ -40,10 +46,15 @@ public:
         }
     }
 
+    std::uint64_t bits_written() const noexcept {
+        return bits_written_;
+    }
+
 private:
     std::ostream& output_;
     std::uint8_t buffer_ = 0;
     unsigned bits_filled_ = 0;
+    std::uint64_t bits_written_ = 0;
 
     void flush_byte() {
         output_.put(static_cast<char>(buffer_));
