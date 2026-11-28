@@ -2,6 +2,7 @@
 CXX = g++
 CXXFLAGS = -std=c++17 -Wall -Wextra -Wpedantic -g -Iinclude
 RELEASE_FLAGS = -std=c++17 -Wall -Wextra -Wpedantic -O2 -Iinclude
+FILE_UTILS_TEST = $(BUILD_DIR)/test_file_utils
 
 BUILD_DIR = build
 
@@ -51,6 +52,9 @@ $(CRC32_TEST): tests/test_crc32.cpp include/crc32.hpp | $(BUILD_DIR)
 $(ARCHIVE_FORMAT_TEST): tests/test_archive_format.cpp include/archive_format.hpp include/frequency_table.hpp | $(BUILD_DIR)
 	$(CXX) $(CXXFLAGS) $< -o $@
 
+$(FILE_UTILS_TEST): tests/test_file_utils.cpp include/file_utils.hpp | $(BUILD_DIR)
+	$(CXX) $(CXXFLAGS) $< -o $@
+
 test: $(MIN_HEAP_TEST) $(HUFFMAN_TREE_TEST) $(HUFFMAN_CODES_TEST) $(BIT_IO_TEST) $(HUFFMAN_CODEC_TEST) $(CRC32_TEST) $(ARCHIVE_FORMAT_TEST)
 	./$(MIN_HEAP_TEST)
 	./$(HUFFMAN_TREE_TEST)
@@ -59,6 +63,7 @@ test: $(MIN_HEAP_TEST) $(HUFFMAN_TREE_TEST) $(HUFFMAN_CODES_TEST) $(BIT_IO_TEST)
 	./$(HUFFMAN_CODEC_TEST)
 	./$(CRC32_TEST)
 	./$(ARCHIVE_FORMAT_TEST)
+	./$(FILE_UTILS_TEST)
 
 benchmark: $(BENCHMARK)
 	./$(BENCHMARK)
